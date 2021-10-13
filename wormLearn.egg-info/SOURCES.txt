@@ -1,0 +1,15 @@
+README.md
+setup.py
+wormLearn/IO_tools.py
+wormLearn/__init__.py
+wormLearn/coco_eval.py
+wormLearn/coco_utils.py
+wormLearn/trackerManager.py
+wormLearn/training_engine.py
+wormLearn/transforms.py
+wormLearn/utils.py
+wormLearn/vis_tools.py
+wormLearn.egg-info/PKG-INFO
+wormLearn.egg-info/SOURCES.txt
+wormLearn.egg-info/dependency_links.txt
+wormLearn.egg-info/top_level.txt
