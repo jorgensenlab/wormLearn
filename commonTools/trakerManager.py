@@ -12,6 +12,7 @@ from cv2 import cv2
 import datetime
 import re
 import pandas as pd
+import configparser
 from . import IO_tools
 from . import vis_tools
 from . import utils
@@ -22,7 +23,7 @@ class InferenceManager():
     Container class. Hand it input data, it wil organize it into experiments. 
     Inferences, processing, and requests for data are properly handed to each experiment
     '''
-    def __init__(self, path_to_data, path_to_model, file_type, ts_fmt=None):
+    def __init__(self, path_to_data, path_to_model, file_type='.tif', ts_fmt=None):
         self.path_to_data = path_to_data
         self.path_to_model = path_to_model
         self.file_type = file_type   ## this should include the dot: ".tif"
@@ -34,6 +35,7 @@ class InferenceManager():
             print('InferenceManager.read_data subfolders_too has been removed!')
         data_folders = glob.glob(self.path_to_data + "/*/")
         if stack_preprocess_data:
+            assert self.ts_fmt is not None
             datasets = [IO_tools.ImageStackset(path, self.path_to_data, IO_tools.inference_transforms(), self.ts_fmt, file_type=self.file_type) for path in data_folders]
         else:
             if folders_are_groups_subfolders_are_expmts:
@@ -45,9 +47,11 @@ class InferenceManager():
             else:
                 datasets = [IO_tools.Imageset(path, self.path_to_data,  IO_tools.inference_transforms(), img_type=self.file_type) for path in data_folders]
         self.experiments = [Experiment(dataset, self.file_type) for dataset in datasets]
-    
-    def infer_worm_BBoxes(self):
+
+    def infer_worm_BBoxes(self, autosave=True):
         self._infer_worm_BBoxes()
+        if autosave:
+            self.save_as_PASCAL_VOC()
         self.organize_inference_results()
     
     def _infer_worm_BBoxes(self):
@@ -89,9 +93,9 @@ class InferenceManager():
             experiment.store_inference_results(inference_results)
     
     def organize_inference_results(self):
-        [experiment.organize_inference_results(self.ts_fmt) for experiment in self.experiments]
+        [experiment.organize_inference_results() for experiment in self.experiments]
     
-    def track_worms(self, pixels_per_mm=None, framerate=2, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
+    def track_worms(self, pixels_per_mm=None, framerate=None, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
         if self.check_for_calibrations():
             self.localize_worms()
             self.track_worms_within_experiment_timepoints(pixels_per_mm=pixels_per_mm, 
@@ -128,7 +132,7 @@ class InferenceManager():
                         CoM.append(center_of_mass_global)
                     result['CoM'] = np.array(CoM, dtype='float32')
     
-    def track_worms_within_experiment_timepoints(self, pixels_per_mm=None, framerate=2, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
+    def track_worms_within_experiment_timepoints(self, pixels_per_mm=None, framerate=None, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
         [experiment.track_worms_within_timepoints(pixels_per_mm=pixels_per_mm, 
                                                   framerate=framerate, 
                                                   missing_frames_forgiven=missing_frames_forgiven, 
@@ -182,7 +186,7 @@ class InferenceManager():
             expmt.set_calibration(px_per_mm)
         print('Set calibrations')
 
-    def mean_speeds_by_group(self, groups=None, group_names=None, min_frames=2, framerate=2):
+    def mean_speeds_by_group(self, groups=None, group_names=None, min_frames=2, framerate=None):
         def df_cleanup(df):
             df = df.astype('float64')
             df['time'] = df.index
@@ -234,7 +238,7 @@ class InferenceManager():
         N_df = df_cleanup(N_df)
         return means_df, SEMs_df, N_df
 
-    def speeds_by_group(self, groups, group_names, min_frames=2, framerate=2):
+    def speeds_by_group(self, groups, group_names, min_frames=2, framerate=None):
         speeds_by_group = {}
         for n, group in enumerate(groups):
             speeds_by_group[group_names[n]] = []
@@ -331,6 +335,8 @@ class Experiment():
         self.tracked = False
         self.timepoints = {}
         self.pixels_per_mm = None
+        self.read_config()
+
     
     def __repr__(self):
         if self.inference_results:
@@ -347,6 +353,16 @@ class Experiment():
     
     def __len__(self):
         return len(self.timepoints)
+
+    def read_config(self):
+        inis = glob.glob(self.imageset.root+'/*.ini')
+        if len(inis) != 1:
+            print(f'WARNING: {len(inis)} .ini files found in {self.imageset.root}')
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(inis[0])
+        self.framerate = float(config['experiment'].get('framerate', ''))
+        self.time_format = config['experiment'].get('time_format', '')
+        print(f'Set framerate: {self.framerate} and time_format: {self.time_format} for {self.imageset}')
             
     def set_calibration(self, pixels_per_mm):
         self.pixels_per_mm = pixels_per_mm
@@ -357,7 +373,9 @@ class Experiment():
     def store_inference_results(self, inference_results):
         self.inference_results = inference_results
     
-    def organize_inference_results(self, ts_fmt, min_score=0.9):
+    def organize_inference_results(self, ts_fmt=None, min_score=0.9):
+        if ts_fmt is None:
+            ts_fmt = self.time_format
         ts_regex_str = ts_fmt.replace(r'%d', r'\d{2}').replace(r'%H', r'\d{2}').replace(r'%M', r'\d{2}').replace(r'%S', r'\d{2}')
         regex_overlappable = '(?=(' + ts_regex_str + '))'
         for img, result in self.inference_results.items():
@@ -375,15 +393,17 @@ class Experiment():
         '''
         if timepoint not in self.timepoints:
             self.timepoints[timepoint] = Timepoint()
+            self.timepoints[timepoint].set_framerate(self.framerate)
         self.timepoints[timepoint].add_result(n, img, result, min_score=min_score)
         
-    def track_worms_within_timepoints(self, pixels_per_mm=None, framerate=2, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
+    def track_worms_within_timepoints(self, pixels_per_mm=None, framerate=None, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
         print(self.imageset.root_stub)
-        self.set_framerate(framerate)
+        if framerate is not None:
+            self.set_framerate(framerate)
         if pixels_per_mm is None:
             pixels_per_mm = self.pixels_per_mm
         [TP.track_worms_across_frames(pixels_per_mm=pixels_per_mm, 
-                                      framerate=framerate, 
+                                      framerate=self.framerate, 
                                       missing_frames_forgiven=missing_frames_forgiven, 
                                       max_mm_per_s=max_mm_per_s,
                                       frame_window=frame_window) 
@@ -501,13 +521,15 @@ class Experiment():
     def tracking_as_dataframe(self):
         return pd.concat([TP.as_dataframe().assign(timestamp=timestamp, experiment=self.imageset.root_stub) for timestamp, TP in self.timepoints.items()])
         
-    def _track_worms(self, dataset, pixels_per_mm=61, framerate=2, missing_frames_forgiven=0, max_mm_per_s=2):
+    def _track_worms(self, dataset, pixels_per_mm=61, framerate=None, missing_frames_forgiven=0, max_mm_per_s=2):
         # if frame_window is None:
         #     frame_window = (0, len(self)-1)
         # else:
         #     frame_window = (max(frame_window[0], 0), min(frame_window[1], len(self)-1))
         # self.frame_window = frame_window
         # # frame_window[0]
+        if framerate is None:
+            framerate = self.framerate
         list_of_worms = [[(0, worm_number)] for worm_number in range(len(dataset[0]['CoM']))]
         for i in range(len(dataset)-1):
             # print('*******************    NEW FRAME   *******************')
@@ -565,8 +587,10 @@ class Experiment():
         
         return list_of_worms
     
-    def _track_worms_across_TP_frames(self, pixels_per_mm=None, framerate=2, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
+    def _track_worms_across_TP_frames(self, pixels_per_mm=None, framerate=None, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
         print(self.imageset.root_stub)
+        if framerate is None:
+            framerate = self.framerate
         self.set_framerate(framerate)
         if pixels_per_mm is None:
             pixels_per_mm = self.pixels_per_mm
@@ -677,7 +701,9 @@ class Timepoint():
     
         
             
-    def track_worms_across_frames(self, pixels_per_mm=61, framerate=2, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
+    def track_worms_across_frames(self, pixels_per_mm=61, framerate=None, missing_frames_forgiven=0, max_mm_per_s=2, frame_window=None):
+        if framerate is None:
+            framerate = self.framerate
         if frame_window is None:
             frame_window = (0, len(self)-1)
         else:
@@ -750,26 +776,32 @@ class Timepoint():
             for frame, idx in worm.worm_as_list:
                 self[frame][1]['wormID'][idx] = worm.ID
                         
-    def calc_speed_of_worms(self, pixels_per_mm=61, framerate=2):
+    def calc_speed_of_worms(self, pixels_per_mm=61, framerate=None):
+        if framerate is None:
+            framerate = self.framerate
         for worm in self.list_of_worms:
             worm.calculate_speed(pixels_per_mm=pixels_per_mm, framerate=framerate)
     
-    def mean_speed(self, min_frames=2, pixels_per_mm=61, framerate=2):
+    def mean_speed(self, min_frames=2, pixels_per_mm=61, framerate=None):
         '''
         calculate mean speed of worms, weighted by the time length of the track
         '''
+        if framerate is None:
+            framerate = self.framerate
         speeds, frame_deltas = self.all_speeds(pixels_per_mm=pixels_per_mm, min_frames=min_frames, framerate=framerate)
         if speeds:
             return sum(x * y for x, y in zip(speeds, frame_deltas)) / sum(frame_deltas)
     
-    def all_speeds(self, pixels_per_mm, min_frames=2, framerate=2):
+    def all_speeds(self, pixels_per_mm, min_frames=2, framerate=None):
+        if framerate is None:
+            framerate = self.framerate
         self.calc_speed_of_worms(pixels_per_mm=pixels_per_mm, framerate=framerate)
         speeds = [worm.mean_speed for worm in self.list_of_worms if worm.N_frames >= min_frames]
         frame_deltas = [worm.delta_T for worm in self.list_of_worms if worm.N_frames >= min_frames]
         return speeds, frame_deltas
 
     def draw_bounding_boxes_on_images(self, imageset, color_by):
-        if color_by is 'worm':
+        if color_by == 'worm':
             self.draw_bounding_boxes_by_worm(imageset)
         if color_by is None:
             self.draw_bounding_boxes(imageset)
@@ -874,7 +906,7 @@ class Timepoint():
                 
 
 class Worm():
-    def __init__(self, worm_as_list, TP, ID, pixels_per_mm=61, framerate=2):
+    def __init__(self, worm_as_list, TP, ID, pixels_per_mm=61, framerate=None):
         self.coords = {}
         self.bboxes = {}
         self.ID = ID
@@ -883,10 +915,13 @@ class Worm():
             self.coords[frame] = TP[frame][1]['CoM'][idx]
             self.bboxes[frame] = TP[frame][1]['boxes'][idx]
         self.frames = sorted(list(self.coords.keys()))
-        if len(self.frames) > 1:
+        self.framerate = framerate
+        if (len(self.frames) > 1) & (framerate is not None):
             self.calculate_speed(pixels_per_mm=pixels_per_mm, framerate=framerate)
     
-    def calculate_speed(self, pixels_per_mm=61, framerate=2):
+    def calculate_speed(self, pixels_per_mm=61, framerate=None):
+        if framerate is None:
+            framerate = self.framerate
         self.speeds = {}
         for i in range(len(self.coords)-1):
             self.speeds[self.frames[i]] = (dist(self.coords[self.frames[i]], self.coords[self.frames[i+1]]) / pixels_per_mm) * (framerate / (self.frames[i+1] - self.frames[i]))
