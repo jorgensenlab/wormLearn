@@ -381,6 +381,8 @@ class Experiment():
         for img, result in self.inference_results.items():
             filebase = os.path.basename(img).replace(self.file_type, '')
             img_N = filebase.split('_')[-1]
+            if not img_N:
+                img_N = 0
             name_no_serial = '_'.join(filebase.split('_')[0:-1])
             timestamp_from_name = re.findall(regex_overlappable, name_no_serial)[-1]
             tp = datetime.datetime.strptime(timestamp_from_name, ts_fmt).strftime('%d:%H:%M:%S')
