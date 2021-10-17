@@ -894,7 +894,7 @@ class Timepoint():
             worm.calculate_speed(pixels_per_mm=pixels_per_mm, framerate=framerate)
             
     def draw_bounding_boxes_on_images(self, imageset, color_by):
-        if color_by is 'worm':
+        if color_by == 'worm':
             self.draw_bounding_boxes_by_worm(imageset)
         if color_by is None:
             self.draw_bounding_boxes(imageset)
