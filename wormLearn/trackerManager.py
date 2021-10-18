@@ -468,6 +468,11 @@ class Experiment():
             dataset = [TP[i][1] for TP in self.timepoints.values() for i in range(len(TP))]
             timesteps = [[1/TP.framerate for _ in range(len(TP)-1)]+[TP.time_to_next_timepoint] for TP in self.timepoints.values()]
             timesteps = [item for sublist in timesteps for item in sublist]
+            unique_steps = {str(i) for i in timesteps if i is not None}
+            if len(unique_steps) == 1:
+                print(f'Tracking across timepoints with {"".join(unique_steps)} s between each')
+            else:
+                print('!!!!!! not a single timestep between timepoints? are timepoints missing? {timesteps}')
         else:
             print('TO DO: IMPLEMENT FRAME WINDOW IN track_worms_across_timepoints. IRGORING FOR NOW')
             # frame_window = (max(frame_window[0], 0), min(frame_window[1], len(self)-1))
@@ -1015,7 +1020,12 @@ class Timepoint():
                 # np.vsplit(arr, arr.shape[0])
                 return np.ma.apply_along_axis(lambda x: str(x), 1, arr)
                 
-        return pd.concat([pd.concat([pd.DataFrame({key: to_1d(self.results[n][key]) for key in self.results[n]}), pd.DataFrame({'Frame':[n]})], 1).fillna(method='ffill') for n in self.n])
+        return pd.concat([
+            pd.concat([
+                pd.DataFrame({key: to_1d(self.results[n][key]) for key in self.results[n]}),
+                pd.DataFrame({'Frame':[n]})], 
+                axis=1).fillna(method='ffill') for n in self.n
+            ])
 
 
 class Worm():
