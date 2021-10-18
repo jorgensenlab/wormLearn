@@ -291,6 +291,7 @@ class Imageset(torch.utils.data.Dataset):
         '''
         from_subfolders_idx ---  indices of which subfolders to pull images from. Used when imagesets are split train/test. Ignored if None
         '''
+        print('imagesethiiii')
         self.root = root
         self.root_stub = root.replace(parent_path, '') if parent_path is not None else None
         self.transforms = transforms
@@ -319,6 +320,9 @@ class Imageset(torch.utils.data.Dataset):
                 self.get_img_paths(root, img_type)
                 print(str(len(self.imgs)) + ' ' + ' or '.join(img_type) + ' files found in ' + root)
         
+    def __repr__(self):
+        return f'Imageset at {self.root_stub}'
+
     def get_BBs_and_img_paths(self, path, bb_type, img_type):
         new_BBs = list(sorted(glob.glob(path + '/*' + bb_type)))
         # print('Found in ', path)

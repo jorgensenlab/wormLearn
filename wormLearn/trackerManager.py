@@ -18,28 +18,32 @@ from . import vis_tools
 from . import utils
 
 
+DEFAULT_MODEL_PATH = r'C:\Users\eddie\Documents\GitHub\wormLearn\models\20-03-10_17-19_retrain\trained_model.pth'
+
+
 class InferenceManager():
     '''
     Container class. Hand it input data, it wil organize it into experiments. 
     Inferences, processing, and requests for data are properly handed to each experiment
     '''
-    def __init__(self, path_to_data, path_to_model=None, file_type='.tif', timestamp_format=None, framerate=None):
+    def __init__(self, path_to_data, path_to_model=None, file_type='.tif', time_format=None, framerate=None):
         self.path_to_data = path_to_data
         if path_to_model is None:
-            path_to_model = r'F:\Hujber\PyTorch\workspace\wormLearn\runs\20-03-10_17-19_retrain\trained_model.pth'
+            path_to_model = DEFAULT_MODEL_PATH
         self.path_to_model = path_to_model
         self.file_type = file_type   ## this should include the dot: ".tif"
-        self.timestamp_format = timestamp_format
+        self.time_format = time_format
         self.framerate = framerate
         self.groups = None
-        
+
     def read_data(self, stack_preprocess_data=False, subfolders_too=False, folders_are_groups_subfolders_are_expmts=False):
         if subfolders_too:
             print('InferenceManager.read_data subfolders_too has been removed!')
         data_folders = glob.glob(self.path_to_data + "/*/")
         self.check_for_config_file()
+        # load datasets with Imageset objects
         if stack_preprocess_data:
-            datasets = [IO_tools.ImageStackset(path, self.path_to_data, IO_tools.inference_transforms(), self.timestamp_format, file_type=self.file_type) for path in data_folders]
+            datasets = [IO_tools.ImageStackset(path, self.path_to_data, IO_tools.inference_transforms(), self.time_format, file_type=self.file_type) for path in data_folders]
         else:
             if folders_are_groups_subfolders_are_expmts:
                 datasets = [IO_tools.Imageset(subfolder, self.path_to_data,  IO_tools.inference_transforms(), img_type=self.file_type) for path in data_folders for subfolder in glob.glob(path + "/*/")]
@@ -50,24 +54,24 @@ class InferenceManager():
             else:
                 datasets = [IO_tools.Imageset(path, self.path_to_data,  IO_tools.inference_transforms(), img_type=self.file_type) for path in data_folders]
         self.experiments = [Experiment(dataset, self.file_type) for dataset in datasets]
-        missing_expmt_config = []
-        for experiment in self.experiments:
-            if experiment.timestamp_format is None:
-                if self.timestamp_format is None:
-                    missing_expmt_config.append(experiment.imageset.root)
-                    continue
-                experiment.timestamp_format = self.timestamp_format
-            if experiment.framerate is None:
-                if self.framerate is None:
-                    missing_expmt_config.append(experiment.imageset.root)
-                experiment.framerate = self.framerate
-        if missing_expmt_config:
-            print('=========!! Error !!=========')
-            print('''Couldn't find experiment config for {}. Please provide a timestamp_format and framerate when initializing the InferenceManager:\nInferenceManager(path_to_data, timestamp_format='XXXX', framerate=X)'''.format(' and '.join([missing_expmt_config[0],
-                '{} others'.format(len(missing_expmt_config)-1)])))
-            print('=============================')
-        else:
-            print('Counted {} plates.'.format(len(self.experiments)))
+        # missing_expmt_config = []
+        # for experiment in self.experiments:
+        #     if experiment.time_format is None:
+        #         if self.time_format is None:
+        #             missing_expmt_config.append(experiment.imageset.root)
+        #             continue
+        #         experiment.time_format = self.time_format
+        #     if experiment.framerate is None:
+        #         if self.framerate is None:
+        #             missing_expmt_config.append(experiment.imageset.root)
+        #         experiment.framerate = self.framerate
+        # if missing_expmt_config:
+        #     print('=========!! Error !!=========')
+        #     print('''Couldn't find experiment config for {}. Please provide a time_format and framerate when initializing the InferenceManager:\nInferenceManager(path_to_data, time_format='XXXX', framerate=X)'''.format(' and '.join([missing_expmt_config[0],
+        #         '{} others'.format(len(missing_expmt_config)-1)])))
+        #     print('=============================')
+        # else:
+        #     print('Counted {} plates.'.format(len(self.experiments)))
     
     def check_for_config_file(self):
         ini_files = glob.glob(self.path_to_data + '/*.ini' )
@@ -77,13 +81,15 @@ class InferenceManager():
                 config.read(ini)
                 if 'experiment' not in config:
                     continue
-                self.timestamp_format = config['experiment'].get('time_format', None)
+                self.time_format = config['experiment'].get('time_format', None)
                 self.framerate = config['experiment'].get('framerate', None)
     
     
-    def infer_worm_BBoxes(self):
+    def infer_worm_BBoxes(self, autosave=True):
         self._infer_worm_BBoxes()
         self.organize_inference_results()
+        if autosave:
+            self.save_as_PASCAL_VOC()
     
     def _infer_worm_BBoxes(self):
         ##### Set up model
@@ -374,15 +380,16 @@ class Experiment():
     This is an organizatinal level analogous to a folder with images inside.
     An experiment consists of one or more timepoints.
     '''
-    def __init__(self, imageset, file_type):
+    def __init__(self, imageset, file_type, time_format=None, framerate=None):
         self.imageset = imageset        # class: IO_tools.ImageDataset
         self.file_type = file_type
         self.inference_results = None
         self.tracked = False
         self.timepoints = {}
         self.pixels_per_mm = None
-        self.timestamp_format = imageset.timestamp_format
-        self.framerate = imageset.framerate
+        self.time_format = time_format
+        self.framerate = framerate
+        self.read_config()
     
     def __repr__(self):
         if self.inference_results:
@@ -399,6 +406,20 @@ class Experiment():
     
     def __len__(self):
         return len(self.timepoints)
+
+    def read_config(self):
+        inis = glob.glob(self.imageset.root+'/*.ini')
+        if len(inis) != 1:
+            print(f'WARNING: {len(inis)} .ini files found in {self.imageset.root}')
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(inis[0])
+        framerate = float(config['experiment'].get('framerate', ''))
+        time_format = config['experiment'].get('time_format', '')
+        if self.framerate is None:
+            self.framerate = framerate
+        if self.time_format is None:
+            self.time_format = time_format
+        print(f'Set framerate: {self.framerate} and time_format: {self.time_format} for {self.imageset}')
             
     def set_calibration(self, pixels_per_mm):
         self.pixels_per_mm = pixels_per_mm
@@ -410,14 +431,14 @@ class Experiment():
         self.inference_results = inference_results
     
     def organize_inference_results(self, min_score=0.9):
-        ts_regex_str = self.timestamp_format.replace(r'%d', r'\d{2}').replace(r'%H', r'\d{2}').replace(r'%M', r'\d{2}').replace(r'%S', r'\d{2}')
+        ts_regex_str = self.time_format.replace(r'%d', r'\d{2}').replace(r'%H', r'\d{2}').replace(r'%M', r'\d{2}').replace(r'%S', r'\d{2}')
         regex_overlappable = '(?=(' + ts_regex_str + '))'
         for img, result in self.inference_results.items():
             filebase = os.path.basename(img).replace(self.file_type, '')
             img_N = filebase.split('_')[-1]
             name_no_serial = '_'.join(filebase.split('_')[0:-1])
             timestamp_from_name = re.findall(regex_overlappable, name_no_serial)[-1]
-            tp = datetime.strptime(timestamp_from_name, self.timestamp_format).strftime('%d:%H:%M:%S')
+            tp = datetime.strptime(timestamp_from_name, self.time_format).strftime('%d:%H:%M:%S')
             self.result_to_timepoint(tp, img_N, img, result, min_score)
         self._timepoint_spacing()
         print('Organized '+str(len(self.inference_results))+' results into '+str(len(self.timepoints))+' timepoints.')

@@ -326,6 +326,9 @@ class Imageset(torch.utils.data.Dataset):
                 self.check_for_config_file()
                 # print(str(len(self.imgs)) + ' ' + ' or '.join(img_type) + ' files found in ' + root)
                 print('{} {} files found in {}'.format(len(self.imgs), ' or '.join(img_type), root))
+
+    def __repr__(self):
+        return f'Imageset at {self.root_stub}'
         
     def get_BBs_and_img_paths(self, path, bb_type, img_type):
         new_BBs = list(sorted(glob.glob(path + '/*' + bb_type)))
