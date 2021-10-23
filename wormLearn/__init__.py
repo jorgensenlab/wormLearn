@@ -1,1 +1,1 @@
-from .trackerManager import InferenceManager
+from .trackerManager import InferenceManager, Grouper
